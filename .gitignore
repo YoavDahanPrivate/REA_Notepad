@@ -1,0 +1,15 @@
+# Build outputs
+build/
+*.obj
+*.res
+*.pdb
+*.ilk
+*.exe
+
+# Screenshots of Microsoft's Notepad and of the desktop used while matching the UI
+docs/real/
+docs/clone/
+docs/comparison.png
+docs/comparison-controls.png
+docs/details-comparison.png
+docs/ascii-art.png
