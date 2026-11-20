@@ -223,12 +223,36 @@ void Step(Game& g) {
     g.hiScore = std::max(g.hiScore, g.score);
 }
 
-void Put(std::vector<std::wstring>& scr, int x, int y, const std::wstring& s) {
-    if (y < 0 || y >= static_cast<int>(scr.size())) return;
-    for (size_t i = 0; i < s.size(); ++i) {
-        int cx = x + static_cast<int>(i);
-        if (cx >= 0 && cx < static_cast<int>(scr[y].size())) scr[y][cx] = s[i];
+// The screen is a grid of characters, each with its own color.
+struct Screen {
+    std::vector<std::wstring> text;
+    std::vector<std::vector<COLORREF>> color;
+    Screen(int cols, int rows, COLORREF c)
+        : text(static_cast<size_t>(rows), std::wstring(static_cast<size_t>(cols), L' ')),
+          color(static_cast<size_t>(rows), std::vector<COLORREF>(static_cast<size_t>(cols), c)) {}
+    void Put(int x, int y, const std::wstring& s, COLORREF c) {
+        if (y < 0 || y >= static_cast<int>(text.size())) return;
+        for (size_t i = 0; i < s.size(); ++i) {
+            int cx = x + static_cast<int>(i);
+            if (cx < 0 || cx >= static_cast<int>(text[y].size())) continue;
+            text[y][cx] = s[i];
+            color[y][cx] = c;
+        }
     }
+};
+
+// Basic arcade colors, in a darker and a brighter set so they read on light and dark editors.
+struct Colors {
+    COLORREF top, middle, bottom, shield, ufo, bomb, gameOver;
+};
+
+Colors PickColors(COLORREF background) {
+    int lum = GetRValue(background) * 3 + GetGValue(background) * 6 + GetBValue(background);
+    if (lum < 1280)
+        return {RGB(240, 120, 240), RGB(80, 220, 240), RGB(255, 210, 60), RGB(100, 220, 110), RGB(255, 90, 90),
+                RGB(255, 140, 60), RGB(255, 90, 90)};
+    return {RGB(180, 40, 180), RGB(0, 145, 175), RGB(200, 135, 0), RGB(40, 150, 60), RGB(214, 40, 40),
+            RGB(230, 90, 20), RGB(214, 40, 40)};
 }
 
 void Paint(Game& g, HDC hdc) {
@@ -247,43 +271,54 @@ void Paint(Game& g, HDC hdc) {
         SelectObject(sdc, os);
         DeleteDC(sdc);
     } else if (!g.intro) {
-        std::vector<std::wstring> scr(static_cast<size_t>(g.rows), std::wstring(static_cast<size_t>(g.cols), L' '));
+        const Colors k = PickColors(g.look.background);
+        Screen scr(g.cols, g.rows, g.look.text);
         wchar_t hud[128];
-        swprintf_s(hud, L" SCORE %06d   HI %06d   LEVEL %d   LIVES %s", g.score, g.hiScore, g.level,
-                   std::wstring(static_cast<size_t>(std::max(0, g.lives)), L'^').c_str());
-        Put(scr, 0, 0, hud);
-        if (g.ufoDir) Put(scr, g.ufoX, 2, L"<=>");
-        for (int r = 0; r < g.alienRows; ++r)
-            for (int c = 0; c < g.alienCols; ++c)
-                if (g.alive[static_cast<size_t>(r * g.alienCols + c)])
-                    Put(scr, AlienX(g, c), AlienY(g, r), AlienSprite(r, g.frame));
-        for (const auto& s : g.shields) {
-            Put(scr, s.x, s.y, s.rows[0]);
-            Put(scr, s.x, s.y + 1, s.rows[1]);
+        swprintf_s(hud, L" SCORE %06d   HI %06d   LEVEL %d   LIVES ", g.score, g.hiScore, g.level);
+        scr.Put(0, 0, hud, g.look.muted);
+        scr.Put(static_cast<int>(wcslen(hud)), 0, std::wstring(static_cast<size_t>(std::max(0, g.lives)), L'^'),
+                g.look.accent);
+        if (g.ufoDir) scr.Put(g.ufoX, 2, L"<=>", k.ufo);
+        for (int r = 0; r < g.alienRows; ++r) {
+            COLORREF c = r == 0 ? k.top : r < 3 ? k.middle : k.bottom;
+            for (int col = 0; col < g.alienCols; ++col)
+                if (g.alive[static_cast<size_t>(r * g.alienCols + col)])
+                    scr.Put(AlienX(g, col), AlienY(g, r), AlienSprite(r, g.frame), c);
         }
-        for (const auto& b : g.shots) Put(scr, b.x, b.y, L"|");
-        for (const auto& b : g.bombs) Put(scr, b.x, b.y, L"!");
-        if (!(g.hitFlash && g.hitFlash % 4 < 2)) Put(scr, g.px, PlayerRow(g), L"/A\\");
-        Put(scr, 0, PlayerRow(g) + 1, std::wstring(static_cast<size_t>(g.cols), L'_'));
-        Put(scr, 1, g.rows - 1, sfx::Muted() ? L"Left/Right move   Space fire   P pause   M sound on   Esc back to your text"
-                                           : L"Left/Right move   Space fire   P pause   M sound off   Esc back to your text");
+        for (const auto& s : g.shields) {
+            scr.Put(s.x, s.y, s.rows[0], k.shield);
+            scr.Put(s.x, s.y + 1, s.rows[1], k.shield);
+        }
+        for (const auto& b : g.shots) scr.Put(b.x, b.y, L"|", g.look.accent);
+        for (const auto& b : g.bombs) scr.Put(b.x, b.y, L"!", k.bomb);
+        if (!(g.hitFlash && g.hitFlash % 4 < 2)) scr.Put(g.px, PlayerRow(g), L"/A\\", g.look.accent);
+        scr.Put(0, PlayerRow(g) + 1, std::wstring(static_cast<size_t>(g.cols), L'_'), k.shield);
+        scr.Put(1, g.rows - 1,
+                sfx::Muted() ? L"Left/Right move   Space fire   P pause   M sound on   Esc back to your text"
+                             : L"Left/Right move   Space fire   P pause   M sound off   Esc back to your text",
+                g.look.muted);
         if (g.over || g.paused) {
             std::wstring msg = g.over ? L"  G A M E   O V E R  -  Enter to play again  " : L"  P A U S E D  ";
             int y = g.rows / 2, x = std::max(0, (g.cols - static_cast<int>(msg.size())) / 2);
-            Put(scr, x, y - 1, std::wstring(msg.size(), L' '));
-            Put(scr, x, y, msg);
-            Put(scr, x, y + 1, std::wstring(msg.size(), L' '));
+            COLORREF c = g.over ? k.gameOver : g.look.text;
+            scr.Put(x, y - 1, std::wstring(msg.size(), L' '), c);
+            scr.Put(x, y, msg, c);
+            scr.Put(x, y + 1, std::wstring(msg.size(), L' '), c);
         }
         HGDIOBJ of = SelectObject(dc, g.look.font);
         SetBkMode(dc, TRANSPARENT);
+        // Draw each row in runs of one color.
         for (int y = 0; y < g.rows; ++y) {
-            SetTextColor(dc, y == 0 || y == g.rows - 1 ? g.look.muted : g.look.text);
-            TextOutW(dc, 0, y * g.lineH, scr[static_cast<size_t>(y)].c_str(), g.cols);
+            const auto& line = scr.text[static_cast<size_t>(y)];
+            const auto& cols = scr.color[static_cast<size_t>(y)];
+            for (int x = 0; x < g.cols;) {
+                int e = x;
+                while (e < g.cols && cols[static_cast<size_t>(e)] == cols[static_cast<size_t>(x)]) ++e;
+                SetTextColor(dc, cols[static_cast<size_t>(x)]);
+                TextOutW(dc, x * g.charW, y * g.lineH, line.c_str() + x, e - x);
+                x = e;
+            }
         }
-        // Player and mystery ship in the accent color.
-        SetTextColor(dc, g.look.accent);
-        if (!(g.hitFlash && g.hitFlash % 4 < 2)) TextOutW(dc, g.px * g.charW, PlayerRow(g) * g.lineH, L"/A\\", 3);
-        if (g.ufoDir) TextOutW(dc, g.ufoX * g.charW, 2 * g.lineH, L"<=>", 3);
         SelectObject(dc, of);
     }
     BitBlt(hdc, 0, 0, rc.right, rc.bottom, dc, 0, 0, SRCCOPY);
