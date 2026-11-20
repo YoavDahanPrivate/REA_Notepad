@@ -1,4 +1,5 @@
 #include "invaders.h"
+#include "sound.h"
 
 #include <algorithm>
 #include <random>
@@ -43,6 +44,7 @@ struct Game {
     int hitFlash = 0;
     bool paused = false, over = false, won = false;
     int tick = 0;
+    int march = 0;  // which note of the fleet's four-note step plays next
 };
 
 Game* g_game = nullptr;
@@ -120,6 +122,8 @@ void Step(Game& g) {
         if (!gone && g.ufoDir && b.y == 2 && b.x >= g.ufoX && b.x < g.ufoX + 3) {
             g.score += 100 + 50 * static_cast<int>(g.rng() % 4);
             g.ufoDir = 0;
+            sfx::StopLoop(sfx::InvUfo);
+            sfx::Play(sfx::InvUfoHit);
             gone = true;
         }
         for (int r = 0; r < g.alienRows && !gone; ++r)
@@ -127,6 +131,7 @@ void Step(Game& g) {
                 size_t k = static_cast<size_t>(r * g.alienCols + c);
                 if (!g.alive[k] || b.y != AlienY(g, r) || b.x < AlienX(g, c) || b.x >= AlienX(g, c) + 3) continue;
                 g.alive[k] = false;
+                sfx::Play(sfx::InvAlienHit);
                 g.score += AlienPoints(r);
                 gone = true;
             }
@@ -146,6 +151,8 @@ void Step(Game& g) {
             }
     if (!count) {  // wave cleared
         ++g.level;
+        sfx::StopLoop(sfx::InvUfo);
+        sfx::Play(sfx::InvWave);
         g.score += 500;
         NewWave(g, false);
         return;
@@ -156,6 +163,8 @@ void Step(Game& g) {
     if (++g.stepTick >= interval) {
         g.stepTick = 0;
         g.frame ^= 1;
+        sfx::Play(static_cast<sfx::Id>(sfx::InvMarch0 + g.march));
+        g.march = (g.march + 1) % 4;
         if (left0 + g.dir < 0 || right0 + g.dir >= g.cols) {
             g.dir = -g.dir;
             ++g.ay;
@@ -165,6 +174,8 @@ void Step(Game& g) {
     }
     if (bottom >= PlayerRow(g) - 1) {
         g.over = true;
+        sfx::StopLoop(sfx::InvUfo);
+        sfx::Play(sfx::InvPlayerHit);
         return;
     }
     // Aliens drop bombs from the lowest alien of a random column.
@@ -185,6 +196,7 @@ void Step(Game& g) {
             if (!gone && b.y == PlayerRow(g) && b.x >= g.px && b.x < g.px + 3) {
                 gone = true;
                 g.hitFlash = 12;
+                sfx::Play(sfx::InvPlayerHit);
                 if (--g.lives <= 0) g.over = true;
                 g.bombs.clear();
                 break;
@@ -204,6 +216,10 @@ void Step(Game& g) {
         g.ufoX += g.ufoDir;
         if (g.ufoX < -3 || g.ufoX > g.cols) g.ufoDir = 0;
     }
+    if (g.ufoDir && !g.over)
+        sfx::Loop(sfx::InvUfo);
+    else
+        sfx::StopLoop(sfx::InvUfo);
     g.hiScore = std::max(g.hiScore, g.score);
 }
 
@@ -249,7 +265,8 @@ void Paint(Game& g, HDC hdc) {
         for (const auto& b : g.bombs) Put(scr, b.x, b.y, L"!");
         if (!(g.hitFlash && g.hitFlash % 4 < 2)) Put(scr, g.px, PlayerRow(g), L"/A\\");
         Put(scr, 0, PlayerRow(g) + 1, std::wstring(static_cast<size_t>(g.cols), L'_'));
-        Put(scr, 1, g.rows - 1, L"Left/Right move   Space fire   P pause   Esc back to your text");
+        Put(scr, 1, g.rows - 1, sfx::Muted() ? L"Left/Right move   Space fire   P pause   M sound on   Esc back to your text"
+                                           : L"Left/Right move   Space fire   P pause   M sound off   Esc back to your text");
         if (g.over || g.paused) {
             std::wstring msg = g.over ? L"  G A M E   O V E R  -  Enter to play again  " : L"  P A U S E D  ";
             int y = g.rows / 2, x = std::max(0, (g.cols - static_cast<int>(msg.size())) / 2);
@@ -294,6 +311,7 @@ void Exit() {
     Game* g = g_game;
     if (!g) return;
     KillTimer(g->hwnd, kTimer);
+    sfx::StopAll();
     auto onExit = g->onExit;
     DestroyWindow(g->hwnd);  // WM_NCDESTROY frees the game
     if (onExit) onExit();
@@ -336,9 +354,15 @@ LRESULT CALLBACK Proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             return 0;
         }
         if (g->intro) return 0;
-        if (wp == VK_SPACE && !g->over && !g->paused && g->shots.size() < 2)
+        if (wp == VK_SPACE && !g->over && !g->paused && g->shots.size() < 2) {
             g->shots.push_back({g->px + 1, PlayerRow(*g) - 1});
-        if (wp == 'P') g->paused = !g->paused;
+            sfx::Play(sfx::InvShot);
+        }
+        if (wp == 'P') {
+            g->paused = !g->paused;
+            if (g->paused) sfx::StopAll();
+        }
+        if (wp == 'M') sfx::SetMuted(!sfx::Muted());
         if (wp == VK_RETURN && g->over) NewWave(*g, true);
         return 0;
     case WM_CHAR:
@@ -346,6 +370,7 @@ LRESULT CALLBACK Proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_KILLFOCUS:
         if (g && !g->over) g->paused = true;
+        sfx::StopAll();
         return 0;
     case WM_LBUTTONDOWN:
         SetFocus(h);

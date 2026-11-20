@@ -16,9 +16,16 @@ P to pause, Enter to play again). Esc puts everything back exactly as it was: th
 gone, the caret, scroll position, undo history and saved/unsaved state are untouched, and the
 game never ends up in the file.
 
+`go pacman now` works the same way and starts a maze-chase game (arrows or WASD; eat the dots,
+grab a big dot to turn the ghosts blue and chase them). Both games have retro arcade sounds that
+are synthesized in code from square, triangle and noise waves (no recorded samples, no tunes
+copied from real arcade games). Press M in either game to turn sound off or on; the choice is
+remembered.
+
 ![Formatting](docs/formatting.png)
 ![ASCII art styles](docs/ascii-styles.png)
 ![Space Invaders](docs/invaders.png)
+![Maze game](docs/maze.png)
 
 ## Install on a Snapdragon (Windows on ARM64) laptop
 
@@ -100,6 +107,8 @@ feature and the Space Invaders trigger/restore, and ends with `RESULT: all passe
 | `src\markdown.cpp` | Markdown model used for formatted text |
 | `src\ascii.cpp` | ASCII art renderer (block letters, shadows, braille) |
 | `src\invaders.cpp` | The `go spaceinvaders now` game, drawn in its own window over the editor |
+| `src\pacman.cpp` | The `go pacman now` maze-chase game (original maze, same restore rules) |
+| `src\sound.cpp` | Synthesized arcade sounds, mixed on a small waveOut stream |
 | `src\ui.cpp` | Shared fonts, colors and drawing helpers |
 | `src\notepad.rc`, `src\app.manifest`, `src\app.ico` | Resources, manifest and the app icon (drawn by the app itself) |
 | `build.bat`, `install.ps1` | Build and per-user install |

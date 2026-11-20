@@ -42,7 +42,7 @@ set "RCDEF="
 if not exist src\app.ico set "RCDEF=/DNO_ICON"
 rc /nologo %RCDEF% /fo %OUT%\notepad.res src\notepad.rc || exit /b 1
 cl /nologo /std:c++20 /EHsc /O2 /W4 /permissive- /utf-8 /DUNICODE /D_UNICODE ^
-   /Fo%OUT%\ /Fd%OUT%\ "/Fe%OUT%\Notepad--.exe" src\main.cpp src\markdown.cpp src\ui.cpp src\flyout.cpp src\dialog.cpp src\ascii.cpp src\invaders.cpp %OUT%\notepad.res ^
+   /Fo%OUT%\ /Fd%OUT%\ "/Fe%OUT%\Notepad--.exe" src\main.cpp src\markdown.cpp src\ui.cpp src\flyout.cpp src\dialog.cpp src\ascii.cpp src\invaders.cpp src\pacman.cpp src\sound.cpp %OUT%\notepad.res ^
    /link /SUBSYSTEM:WINDOWS /MANIFEST:NO || exit /b 1
 
 rem Only if src\app.ico is missing: draw the icon with the app itself, then relink with it.

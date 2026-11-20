@@ -226,6 +226,14 @@ S6 Fine dots, S7 Solid blocks, S8 Hash marks. Heights: H1 3, H2 6, H3 11, H4 16 
   size and zoom, editor colors with the accent for the player and mystery ship. It never touches
   the document, so autosave/session restore never see it. Accelerators are off while it runs.
 - Esc destroys the window and gives focus back to the editor.
+- `go pacman now` uses the same trigger/restore path and starts the maze game
+  (`ReaNotepadMaze`): an original 19x19 maze drawn with double-line box characters, two text
+  columns per cell, four ghosts with different targets (scatter 7 s / chase 20 s), power dots,
+  fruit, levels. The font shrinks if needed so the whole maze fits.
+- Sounds (`src\sound.cpp`): every effect is generated at start-up from square/triangle/noise
+  waves and mixed by a 22 kHz mono waveOut stream (3 x 23 ms buffers), so sounds overlap.
+  Loops (UFO, siren, power) are idempotent. M mutes; stored as `GameSoundOff` under
+  `HKCU\Software\ReaNotepad`. No audio device means the games stay silent.
 
 ## How the clone is checked
 

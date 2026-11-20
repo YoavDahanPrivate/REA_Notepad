@@ -39,6 +39,8 @@
 #include "dialog.h"
 #include "flyout.h"
 #include "invaders.h"
+#include "pacman.h"
+#include "sound.h"
 #include "markdown.h"
 #include "resource.h"
 #include "ui.h"
@@ -801,6 +803,7 @@ void LayoutChildren() {
     }
     if (g_find && IsWindowVisible(g_find)) PositionFind(l);
     invaders::Reposition(l.editor);
+    pacman::Reposition(l.editor);
     PositionSettings();
     ExtendFrame();
 }
@@ -4032,14 +4035,17 @@ void OnCommand(UINT id) {
 }
 
 // ---------------------------------------------------------------------------
-// Easter egg: typing "go spaceinvaders now" on a line of its own and pressing Enter
-// starts an ASCII Space Invaders over the editor. The trigger line is taken back out
+// Easter eggs: typing "go spaceinvaders now" (or "go pacman now") on a line of its own and
+// pressing Enter starts an ASCII game over the editor, with synthesized arcade sounds. The trigger line is taken back out
 // through the undo history (so undo/redo stay as they were before it was typed), and the
 // game draws only on its own window, so Esc returns to exactly the text, caret, scroll
 // position and modified state from before.
 
 constexpr wchar_t kInvadersTrigger[] = L"go spaceinvaders now";
+constexpr wchar_t kPacmanTrigger[] = L"go pacman now";
 HFONT g_invadersFont;
+
+bool GameRunning() { return invaders::Running() || pacman::Running(); }
 
 size_t TextHash(Tab& t) { return std::hash<std::wstring>{}(RawText(t, 0, StoryLength(t))); }
 
@@ -4066,14 +4072,18 @@ long RemoveTrigger(Tab& t, long ps, long caret) {
     return ps;
 }
 
-bool TryStartInvaders(Tab& t) {
-    if (invaders::Running() || !t.doc) return false;
+bool TryStartGame(Tab& t) {
+    if (GameRunning() || !t.doc) return false;
     CHARRANGE cr{};
     SendMessageW(t.edit, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&cr));
-    const long n = static_cast<long>(wcslen(kInvadersTrigger));
-    if (cr.cpMin != cr.cpMax || cr.cpMin < n) return false;
+    if (cr.cpMin != cr.cpMax) return false;
+    const bool maze = cr.cpMin >= static_cast<long>(wcslen(kPacmanTrigger)) &&
+                      RawText(t, cr.cpMin - static_cast<long>(wcslen(kPacmanTrigger)), cr.cpMin) == kPacmanTrigger;
+    const wchar_t* trigger = maze ? kPacmanTrigger : kInvadersTrigger;
+    const long n = static_cast<long>(wcslen(trigger));
+    if (cr.cpMin < n) return false;
     const long ps = cr.cpMin - n;
-    if (RawText(t, ps, cr.cpMin) != kInvadersTrigger) return false;
+    if (RawText(t, ps, cr.cpMin) != trigger) return false;
     if (ps > 0 && RawText(t, ps - 1, ps) != L"\r") return false;  // must be the whole line
     if (cr.cpMin < StoryLength(t) - 1 && RawText(t, cr.cpMin, cr.cpMin + 1) != L"\r") return false;
 
@@ -4114,12 +4124,16 @@ bool TryStartInvaders(Tab& t) {
                                  L"Consolas");
     invaders::Look look{g_invadersFont, g_pal.editor, g_pal.text, g_pal.accent, g_pal.textMuted};
     HWND edit = t.edit;
-    invaders::Start(g_hwnd, GetLayout().editor, snap, look, [edit] {
+    auto onExit = [edit] {
         if (g_invadersFont) DeleteObject(g_invadersFont);
         g_invadersFont = nullptr;
         if (Tab* c = Cur(); c && c->edit == edit) SetFocus(edit);
         InvalidateRect(edit, nullptr, TRUE);
-    });
+    };
+    if (maze)
+        pacman::Start(g_hwnd, GetLayout().editor, snap, look, onExit);
+    else
+        invaders::Start(g_hwnd, GetLayout().editor, snap, look, onExit);
     return true;
 }
 
@@ -4148,7 +4162,7 @@ LRESULT CALLBACK EditSubclass(HWND h, UINT m, WPARAM wp, LPARAM lp, UINT_PTR, DW
             // a ##text## (ASCII art), and a new paragraph after a heading starts as body text.
             Tab* t = Cur();
             if (t && t->edit == h) {
-                if (!shift && TryStartInvaders(*t)) return 0;  // the Enter itself is never typed
+                if (!shift && TryStartGame(*t)) return 0;  // the Enter itself is never typed
                 CHARRANGE before{};
                 SendMessageW(h, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&before));
                 bool hashes = g_set.asciiOn && before.cpMin == before.cpMax && before.cpMin >= 5 &&
@@ -5322,6 +5336,20 @@ int RunSelfTest(const std::wstring& logPath) {
         SendMessageW(gn->edit, EM_SETSEL, 24, 24);
         SendMessageW(gn->edit, WM_KEYDOWN, VK_RETURN, 0);
         check(L"invaders: only a whole line triggers", invaders::Running() ? L"running" : L"not running", L"not running");
+        // The maze game: same restore guarantees.
+        Tab* gp = NewTab(Kind::Text);
+        StreamText(gp->edit, L"Notes\r", false);
+        FinishLoad(*gp);
+        long pend = StoryLength(*gp) - 1;
+        SendMessageW(gp->edit, EM_SETSEL, pend, pend);
+        for (const wchar_t* p = kPacmanTrigger; *p; ++p) SendMessageW(gp->edit, WM_CHAR, *p, 0);
+        SendMessageW(gp->edit, WM_KEYDOWN, VK_RETURN, 0);
+        check(L"maze: game starts on Enter", pacman::Running() ? L"running" : L"not running", L"running");
+        check(L"maze: trigger line removed", PlainOf(*gp), L"Notes\r");
+        check(L"maze: modified flag restored", std::wstring(IsModified(*gp) ? L"modified" : L"clean"), L"clean");
+        pacman::Stop();
+        check(L"maze: Esc ends the game", pacman::Running() ? L"running" : L"stopped", L"stopped");
+        check(L"maze: text unchanged after the game", PlainOf(*gp), L"Notes\r");
     }
 
     log += failures ? L"RESULT: " + std::to_wstring(failures) + L" failure(s)\r\n" : L"RESULT: all passed\r\n";
@@ -5362,6 +5390,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     flyout::Register(inst);
     dlg::Register(inst);
     invaders::Register(inst);
+    pacman::Register(inst);
     g_pal = kLight;
 
     ACCEL accels[] = {
@@ -5436,11 +5465,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
 
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) {
-        if (!g_settings && !invaders::Running() && TranslateAcceleratorW(g_hwnd, g_accel, &m)) continue;
+        if (!g_settings && !GameRunning() && TranslateAcceleratorW(g_hwnd, g_accel, &m)) continue;
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }
     DestroyAcceleratorTable(g_accel);
+    sfx::Shutdown();
     BufferedPaintUnInit();
     OleUninitialize();
     return static_cast<int>(m.wParam);
