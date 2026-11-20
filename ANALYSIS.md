@@ -212,6 +212,21 @@ S6 Fine dots, S7 Solid blocks, S8 Hash marks. Heights: H1 3, H2 6, H3 11, H4 16 
 - Long phrases wrap onto several banners to fit the window width; art lines use Consolas in
   formatted tabs so they line up.
 
+## Extra feature: Space Invaders easter egg
+
+- Trigger: the whole line is exactly `go spaceinvaders now` and the caret is at its end when
+  Enter is pressed (Shift+Enter doesn't trigger). The Enter itself is swallowed.
+- The trigger line is removed by undoing the typing, so the undo stack is what it was before the
+  line was typed; if undo can't reach that state it redoes and deletes the range instead. The
+  modified flag is cleared when the text hashes to what was last loaded/saved. Caret and
+  `EM_GETSCROLLPOS` are restored before the game appears.
+- Intro: a bitmap of the editor (taken with the trigger line still visible) scrolls up one line
+  per tick, like Enter being held down, until the page is empty.
+- The game is a child window (`ReaNotepadInvaders`) over the editor rect, Consolas at the editor's
+  size and zoom, editor colors with the accent for the player and mystery ship. It never touches
+  the document, so autosave/session restore never see it. Accelerators are off while it runs.
+- Esc destroys the window and gives focus back to the editor.
+
 ## How the clone is checked
 
 `build\<arch>\Notepad--.exe --selftest <log>` runs Markdown round trips (parse → editor → Markdown),

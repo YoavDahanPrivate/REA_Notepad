@@ -38,6 +38,7 @@
 #include "ascii.h"
 #include "dialog.h"
 #include "flyout.h"
+#include "invaders.h"
 #include "markdown.h"
 #include "resource.h"
 #include "ui.h"
@@ -169,6 +170,7 @@ struct Tab {
     Kind kind = Kind::Text;
     bool rich = false;    // control in rich-text mode with the formatting toolbar
     bool syntax = false;  // Markdown shown as raw syntax
+    size_t cleanHash = 0;  // text as last loaded/saved, to restore the modified flag
 };
 
 struct Layout {
@@ -798,6 +800,7 @@ void LayoutChildren() {
         SendMessageW(t->edit, EM_SETRECT, 0, reinterpret_cast<LPARAM>(&rc));
     }
     if (g_find && IsWindowVisible(g_find)) PositionFind(l);
+    invaders::Reposition(l.editor);
     PositionSettings();
     ExtendFrame();
 }
@@ -1525,10 +1528,13 @@ bool LoadMarkdown(Tab& t, const std::wstring& text) {
     return false;
 }
 
+size_t TextHash(Tab& t);
+
 void FinishLoad(Tab& t) {
     SendMessageW(t.edit, EM_SETSEL, 0, 0);
     SendMessageW(t.edit, EM_EMPTYUNDOBUFFER, 0, 0);
     SendMessageW(t.edit, EM_SETMODIFY, FALSE, 0);
+    t.cleanHash = TextHash(t);
     t.shownModified = false;
 }
 
@@ -1594,6 +1600,7 @@ Tab* NewTab(Kind kind = Kind::Text) {
     }
     SetWindowSubclass(e, EditSubclass, 1, 0);
     ApplyEditorLook(*t);
+    t->cleanHash = TextHash(*t);
 
     Tab* raw = t.get();
     g_tabs.push_back(std::move(t));
@@ -1808,6 +1815,7 @@ bool SaveTab(Tab& t, bool saveAs) {
         FinishLoad(t);
     }
     SendMessageW(t.edit, EM_SETMODIFY, FALSE, 0);
+    t.cleanHash = TextHash(t);
     MarkModifiedChanged(t);
     AddRecent(path);
     UpdateTitle();
@@ -4023,6 +4031,98 @@ void OnCommand(UINT id) {
     if (GetFocus() != g_findEdit && GetFocus() != g_replEdit) SetFocus(e);
 }
 
+// ---------------------------------------------------------------------------
+// Easter egg: typing "go spaceinvaders now" on a line of its own and pressing Enter
+// starts an ASCII Space Invaders over the editor. The trigger line is taken back out
+// through the undo history (so undo/redo stay as they were before it was typed), and the
+// game draws only on its own window, so Esc returns to exactly the text, caret, scroll
+// position and modified state from before.
+
+constexpr wchar_t kInvadersTrigger[] = L"go spaceinvaders now";
+HFONT g_invadersFont;
+
+size_t TextHash(Tab& t) { return std::hash<std::wstring>{}(RawText(t, 0, StoryLength(t))); }
+
+// Takes the typed trigger [ps, caret) back out and returns where the caret belongs, or -1.
+long RemoveTrigger(Tab& t, long ps, long caret) {
+    const std::wstring now = RawText(t, 0, StoryLength(t));
+    const size_t ups = static_cast<size_t>(ps), uc = static_cast<size_t>(caret);
+    const std::wstring withoutLine = now.substr(0, ups) + now.substr(uc);
+    // If undo groups the Enter that started the line with the typing, accept that state too.
+    const bool hasBreak = ps > 0 && now[ups - 1] == L'\r';
+    const std::wstring withoutBreak = hasBreak ? now.substr(0, ups - 1) + now.substr(uc) : std::wstring();
+    int undone = 0;
+    while (undone < 40 && SendMessageW(t.edit, EM_CANUNDO, 0, 0)) {
+        SendMessageW(t.edit, EM_UNDO, 0, 0);
+        ++undone;
+        std::wstring s = RawText(t, 0, StoryLength(t));
+        if (s == withoutLine) return ps;
+        if (hasBreak && s == withoutBreak) return ps - 1;
+        if (s.size() < (hasBreak ? withoutBreak.size() : withoutLine.size())) break;  // went too far
+    }
+    for (int i = 0; i < undone; ++i) SendMessageW(t.edit, EM_REDO, 0, 0);
+    if (RawText(t, 0, StoryLength(t)) != now) return -1;
+    DeleteRange(t, ps, caret);
+    return ps;
+}
+
+bool TryStartInvaders(Tab& t) {
+    if (invaders::Running() || !t.doc) return false;
+    CHARRANGE cr{};
+    SendMessageW(t.edit, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&cr));
+    const long n = static_cast<long>(wcslen(kInvadersTrigger));
+    if (cr.cpMin != cr.cpMax || cr.cpMin < n) return false;
+    const long ps = cr.cpMin - n;
+    if (RawText(t, ps, cr.cpMin) != kInvadersTrigger) return false;
+    if (ps > 0 && RawText(t, ps - 1, ps) != L"\r") return false;  // must be the whole line
+    if (cr.cpMin < StoryLength(t) - 1 && RawText(t, cr.cpMin, cr.cpMin + 1) != L"\r") return false;
+
+    POINT scroll{};
+    SendMessageW(t.edit, EM_GETSCROLLPOS, 0, reinterpret_cast<LPARAM>(&scroll));
+    // Picture of the editor as it is now, for the "new lines push the text away" intro.
+    RECT er;
+    GetClientRect(t.edit, &er);
+    HBITMAP snap = nullptr;
+    if (IsWindowVisible(t.edit) && er.right > 0 && er.bottom > 0) {
+        HDC src = GetDC(t.edit);
+        HDC mem = CreateCompatibleDC(src);
+        snap = CreateCompatibleBitmap(src, er.right, er.bottom);
+        HGDIOBJ old = SelectObject(mem, snap);
+        BitBlt(mem, 0, 0, er.right, er.bottom, src, 0, 0, SRCCOPY);
+        SelectObject(mem, old);
+        DeleteDC(mem);
+        ReleaseDC(t.edit, src);
+    }
+
+    const long caret = RemoveTrigger(t, ps, cr.cpMin);
+    if (caret < 0) {
+        if (snap) DeleteObject(snap);
+        return false;
+    }
+    if (TextHash(t) == t.cleanHash) SendMessageW(t.edit, EM_SETMODIFY, FALSE, 0);
+    CHARRANGE back{caret, caret};
+    SendMessageW(t.edit, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&back));
+    SendMessageW(t.edit, EM_SETSCROLLPOS, 0, reinterpret_cast<LPARAM>(&scroll));
+    MarkModifiedChanged(t);
+
+    // Monospace game font at the editor's size and zoom.
+    const int pt10 = std::max(60, g_set.fontSize10 * t.zoom / 100);
+    const int dpi = static_cast<int>(GetDpiForWindow(g_hwnd));
+    if (g_invadersFont) DeleteObject(g_invadersFont);
+    g_invadersFont = CreateFontW(-MulDiv(pt10, dpi, 720), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
+                                 L"Consolas");
+    invaders::Look look{g_invadersFont, g_pal.editor, g_pal.text, g_pal.accent, g_pal.textMuted};
+    HWND edit = t.edit;
+    invaders::Start(g_hwnd, GetLayout().editor, snap, look, [edit] {
+        if (g_invadersFont) DeleteObject(g_invadersFont);
+        g_invadersFont = nullptr;
+        if (Tab* c = Cur(); c && c->edit == edit) SetFocus(edit);
+        InvalidateRect(edit, nullptr, TRUE);
+    });
+    return true;
+}
+
 LRESULT CALLBACK EditSubclass(HWND h, UINT m, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
     switch (m) {
     case WM_MOUSEWHEEL:
@@ -4048,6 +4148,7 @@ LRESULT CALLBACK EditSubclass(HWND h, UINT m, WPARAM wp, LPARAM lp, UINT_PTR, DW
             // a ##text## (ASCII art), and a new paragraph after a heading starts as body text.
             Tab* t = Cur();
             if (t && t->edit == h) {
+                if (!shift && TryStartInvaders(*t)) return 0;  // the Enter itself is never typed
                 CHARRANGE before{};
                 SendMessageW(h, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&before));
                 bool hashes = g_set.asciiOn && before.cpMin == before.cpMax && before.cpMin >= 5 &&
@@ -5195,6 +5296,34 @@ int RunSelfTest(const std::wstring& logPath) {
         g_set.asciiOn = was; g_set.asciiPlacement = keep; g_set.asciiHeight = height; g_set.asciiStyle = style; g_set.asciiFont = font;
     }
 
+    {
+        // Space Invaders: the trigger line disappears, the game runs, Esc gives back the same text.
+        Tab* gi = NewTab(Kind::Text);
+        StreamText(gi->edit, L"First line\rSecond line\r", false);
+        FinishLoad(*gi);
+        long end = StoryLength(*gi) - 1;
+        SendMessageW(gi->edit, EM_SETSEL, end, end);
+        for (const wchar_t* p = kInvadersTrigger; *p; ++p) SendMessageW(gi->edit, WM_CHAR, *p, 0);
+        check(L"invaders: trigger typed", std::wstring(IsModified(*gi) ? L"modified" : L"clean"), L"modified");
+        SendMessageW(gi->edit, WM_KEYDOWN, VK_RETURN, 0);
+        check(L"invaders: game starts on Enter", invaders::Running() ? L"running" : L"not running", L"running");
+        check(L"invaders: trigger line removed", PlainOf(*gi), L"First line\rSecond line\r");
+        check(L"invaders: modified flag restored", std::wstring(IsModified(*gi) ? L"modified" : L"clean"), L"clean");
+        CHARRANGE gc{};
+        SendMessageW(gi->edit, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&gc));
+        check(L"invaders: caret back where the line was", std::to_wstring(gc.cpMin), std::to_wstring(end));
+        check(L"invaders: nothing left to undo", SendMessageW(gi->edit, EM_CANUNDO, 0, 0) ? L"can undo" : L"empty", L"empty");
+        invaders::Stop();
+        check(L"invaders: Esc ends the game", invaders::Running() ? L"running" : L"stopped", L"stopped");
+        check(L"invaders: text unchanged after the game", PlainOf(*gi), L"First line\rSecond line\r");
+        // Not on a line of its own: just a normal Enter.
+        Tab* gn = NewTab(Kind::Text);
+        StreamText(gn->edit, L"say go spaceinvaders now", false);
+        SendMessageW(gn->edit, EM_SETSEL, 24, 24);
+        SendMessageW(gn->edit, WM_KEYDOWN, VK_RETURN, 0);
+        check(L"invaders: only a whole line triggers", invaders::Running() ? L"running" : L"not running", L"not running");
+    }
+
     log += failures ? L"RESULT: " + std::to_wstring(failures) + L" failure(s)\r\n" : L"RESULT: all passed\r\n";
     WriteAllBytes(logPath, Encode(log, Encoding::Utf8));
     for (auto& tab : g_tabs) SendMessageW(tab->edit, EM_SETMODIFY, FALSE, 0);
@@ -5232,6 +5361,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     RegisterSettingsClass(inst);
     flyout::Register(inst);
     dlg::Register(inst);
+    invaders::Register(inst);
     g_pal = kLight;
 
     ACCEL accels[] = {
@@ -5306,7 +5436,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
 
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) {
-        if (!g_settings && TranslateAcceleratorW(g_hwnd, g_accel, &m)) continue;
+        if (!g_settings && !invaders::Running() && TranslateAcceleratorW(g_hwnd, g_accel, &m)) continue;
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }

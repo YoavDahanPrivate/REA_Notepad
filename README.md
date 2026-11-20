@@ -10,8 +10,15 @@ Extra, not in Windows Notepad: type `##some text##` followed by any key and the 
 ASCII art on the lines below. `#S3H2#some text##` picks style 3 and height 2 for one banner
 (the codes are shown in Edit > ASCII art).
 
+Hidden extra: type `go spaceinvaders now` on a line of its own and press Enter. Your text scrolls
+away and an ASCII Space Invaders takes over the page (Left/Right or A/D to move, Space to fire,
+P to pause, Enter to play again). Esc puts everything back exactly as it was: the trigger line is
+gone, the caret, scroll position, undo history and saved/unsaved state are untouched, and the
+game never ends up in the file.
+
 ![Formatting](docs/formatting.png)
 ![ASCII art styles](docs/ascii-styles.png)
+![Space Invaders](docs/invaders.png)
 
 ## Install on a Snapdragon (Windows on ARM64) laptop
 
@@ -81,7 +88,7 @@ Get-Content selftest.log
 ```
 
 It checks Markdown round trips, the formatting commands, tables, links and the ASCII art
-feature, and ends with `RESULT: all passed`.
+feature and the Space Invaders trigger/restore, and ends with `RESULT: all passed`.
 
 ## Source layout
 
@@ -92,6 +99,7 @@ feature, and ends with `RESULT: all passed`.
 | `src\dialog.cpp` | ContentDialog-style dialogs and the What's new tour |
 | `src\markdown.cpp` | Markdown model used for formatted text |
 | `src\ascii.cpp` | ASCII art renderer (block letters, shadows, braille) |
+| `src\invaders.cpp` | The `go spaceinvaders now` game, drawn in its own window over the editor |
 | `src\ui.cpp` | Shared fonts, colors and drawing helpers |
 | `src\notepad.rc`, `src\app.manifest`, `src\app.ico` | Resources, manifest and the app icon (drawn by the app itself) |
 | `build.bat`, `install.ps1` | Build and per-user install |
